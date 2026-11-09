@@ -2,7 +2,7 @@
 <html lang="pt-BR">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>MercadoLens — Analisador de Custos</title>
 <script>
 /*! xlsx.js (C) 2013-present SheetJS -- http://sheetjs.com */
@@ -337,6 +337,31 @@ td.tc-hist{text-align:center}
 .mk-sub{font-family:'DM Mono',monospace;font-size:11px;color:var(--t2);margin-top:3px}
 .mk-price{background:var(--s2);border:1px solid var(--bd);border-radius:8px;padding:8px 10px;color:var(--txt);font-family:'DM Mono',monospace;font-size:13px;cursor:pointer;flex-shrink:0}
 .mk-foot{padding:14px 16px;border-top:1px solid var(--bd);background:var(--s0)}
+
+/* ── CELULAR (o PC continua igual) ── */
+@media (max-width:800px){
+  html,body{overflow-x:hidden}
+  header{height:auto;position:static;flex-wrap:wrap;gap:10px;padding:10px 14px}
+  .header-actions{flex-wrap:wrap;gap:6px;width:100%}
+  .header-actions .btn-ghost,.header-actions .btn-primary{padding:8px 10px;font-size:11px}
+  .layout{display:block;min-height:0}
+  .sidebar{height:auto;overflow:visible;display:flex;flex-wrap:wrap;border-right:none;border-bottom:1px solid var(--bd);padding:8px}
+  .sidebar .sb-section,.sidebar .sb-divider,.sidebar #year-filter,.sidebar #month-list{width:100%}
+  .sidebar .sb-special{width:50%;font-size:12px;padding:10px 8px}
+  .sidebar .sb-special[onclick="abreMercado()"]{order:-1;width:100%;background:var(--s2);border:1px solid var(--gold);border-radius:8px;justify-content:center;margin-bottom:6px;font-size:14px}
+  main{padding:14px}
+  .kpi-grid{grid-template-columns:repeat(2,1fr);gap:10px}
+  main table{display:block;overflow-x:auto;max-width:100%}
+  main [style*="grid-template-columns"]{grid-template-columns:1fr !important}
+  main [style*="display:flex"]{flex-wrap:wrap}
+  .sidebar #month-list{display:flex;gap:6px;overflow-x:auto;padding:2px 2px 8px}
+  .sidebar #month-list .sb-nav-btn{flex:0 0 auto;width:auto;gap:8px;border:1px solid var(--bd);border-radius:8px;padding:8px 10px}
+  .sidebar #year-filter{flex-direction:row !important;flex-wrap:wrap}
+  .dual,.tri{grid-template-columns:1fr}
+  .ov-grid{grid-template-columns:repeat(2,1fr)}
+  .dual>*,.tri>*,.panel{min-width:0}
+  main img,main svg{max-width:100%}
+}
 </style>
 </head>
 <body>
@@ -3406,6 +3431,12 @@ function clearAllData() {
     </div>`;
   showToast('Dados removidos com sucesso');
 }
+
+// No celular, ao tocar no menu, rola até o conteúdo
+document.querySelector('.sidebar').addEventListener('click', e => {
+  if (innerWidth > 800 || !e.target.closest('button')) return;
+  setTimeout(() => { const m = document.getElementById('main-content'); if (m) m.scrollIntoView({ behavior: 'smooth', block: 'start' }); }, 120);
+});
 
 // ── INIT ──────────────────────────────────────────────────────────
 loadFromStorage();
