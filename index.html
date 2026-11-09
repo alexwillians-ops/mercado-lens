@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
-<head><script defer src="/_vercel/insights/script.js"></script>
+<head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MercadoLens — Analisador de Custos</title>
@@ -361,6 +361,10 @@ td.tc-hist{text-align:center}
     <button class="btn-primary" onclick="document.getElementById('file-input').click()">
       <svg width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
       Importar Planilha
+    </button>
+    <button class="btn-ghost" onclick="abreManual()" title="Lançar só o valor total de uma compra sem nota">✎ Total sem nota</button>
+    <button class="btn-primary" style="background:var(--teal)" onclick="abreNota()" title="Cole o texto de uma nota fiscal (NFC-e) do Nota Paraná">
+      🧾 Importar Nota
     </button>
     <input type="file" id="file-input" accept=".xlsx" onchange="importXLSX(this)">
   </div>
@@ -1383,7 +1387,8 @@ function limparLista() {
 // ── DADOS DA LISTA: todos os produtos já comprados ────────────────
 const _ehKg = un => /^kg$/i.test(un || '');
 const _qtdItem = it => { let q = it.qtd > 0 ? it.qtd : 1; if (_ehKg(it.un) && q > 50) q = q / 1000; return q; }; // peso digitado em gramas
-const _produtoValido = n => n && !/^nan$/i.test(String(n).trim());
+const MANUAL_NOME = 'LANÇAMENTO SEM NOTA (TOTAL)';
+const _produtoValido = n => n && !/^nan$/i.test(String(n).trim()) && String(n).trim() !== MANUAL_NOME;
 function isKg(p) { return _ehKg(p.un); }
 function fmtQtd(q) { return q % 1 === 0 ? q.toFixed(0) : q.toFixed(1).replace('.', ','); }
 
@@ -3145,6 +3150,203 @@ function importXLSX(input) {
     input.value = '';
   };
   reader.readAsArrayBuffer(file);
+}
+
+
+// ── IMPORTAR NOTA FISCAL (NFC-e / Nota Paraná) ────────────────────
+// O usuário cola o texto da nota; o app extrai mercado, data e produtos,
+// mostra uma prévia e só grava após confirmação.
+let NOTA = null;
+const _MES_ABR = ['Jan','Fev','Mar','Abr','Mai','Jun','Jul','Ago','Set','Out','Nov','Dez'];
+const _MES_NOME = ['JANEIRO','FEVEREIRO','MARÇO','ABRIL','MAIO','JUNHO','JULHO','AGOSTO','SETEMBRO','OUTUBRO','NOVEMBRO','DEZEMBRO'];
+function _num(t) { t = String(t).trim(); if (t.indexOf(',') >= 0) t = t.replace(/\./g, '').replace(',', '.'); return parseFloat(t); }
+function _cnpjMap() { try { return JSON.parse(localStorage.getItem('mercadolens_cnpj') || '{}') || {}; } catch (e) { return {}; } }
+function _salvaCnpj(cnpj, nome) { if (!cnpj) return; try { const m = _cnpjMap(); m[cnpj] = nome; localStorage.setItem('mercadolens_cnpj', JSON.stringify(m)); } catch (e) {} }
+function mesChaveDe(ano, mes) { // mes 0-11 -> {key,label}
+  const label = _MES_ABR[mes] + '/' + String(ano).slice(2);
+  const ex = Object.keys(DB).find(k => DB[k].label === label);
+  return { key: ex || (_MES_NOME[mes] + ' ' + String(ano).slice(2)), label };
+}
+function parseNota(txt) {
+  const t = String(txt || '').replace(/\r/g, '').replace(/ /g, ' ');
+  const itens = [];
+  const re = /([^\n(]+?)\s*\(\s*C[óo]digo\s*:\s*[^)]*\)([\s\S]*?)Qtde\.?\s*:\s*([\d.,]+)\s*UN\s*:\s*([A-Za-zÀ-ú]+)\s*Vl\.?\s*Unit\.?\s*:\s*([\d.,]+)\s*(?:\n\s*)?([\d.]*\d,\d{2})?/gi;
+  let m;
+  while ((m = re.exec(t))) {
+    let nome = m[1].trim().replace(/\s+/g, ' ');
+    const qtd = _num(m[3]), un = m[4].toUpperCase(), unit = _num(m[5]);
+    if (!nome || !(qtd > 0) || !(unit >= 0)) continue;
+    let valor = Math.round(qtd * unit * 100) / 100;
+    const tot = m[6] ? _num(m[6]) : NaN;
+    if (!isNaN(tot) && Math.abs(tot - valor) <= 0.05) valor = tot;
+    itens.push({ produto: nome.toUpperCase(), qtd, un, valor });
+  }
+  // mercado: primeira linha após "DOCUMENTO AUXILIAR..." ou a linha antes do CNPJ
+  let mercado = '', cnpj = '';
+  const mc = t.match(/CNPJ\s*:?\s*(\d{2}\.\d{3}\.\d{3}\/\d{4}-\d{2})/i);
+  if (mc) {
+    cnpj = mc[1];
+    const antes = t.slice(0, mc.index).split('\n').map(x => x.trim()).filter(Boolean);
+    mercado = antes.length ? antes[antes.length - 1] : '';
+    if (/DOCUMENTO AUXILIAR|NFC|FILTRAR/i.test(mercado)) mercado = '';
+  }
+  if (!mercado) { const mr = t.match(/Nome\s*\/\s*Raz[ãa]o Social\s*\n?\s*([^\n]+)/i); if (mr) mercado = mr[1].trim(); }
+  // data
+  let data = null;
+  const md = t.match(/Emiss[ãa]o[^\d]{0,20}(\d{2})\/(\d{2})\/(20\d\d)/i) || t.match(/(\d{2})\/(\d{2})\/(20\d\d)/);
+  if (md) data = { d: +md[1], m: +md[2], a: +md[3] };
+  // chave de acesso (44 dígitos)
+  let chave = '';
+  const mk = t.match(/(?:\d{4}[ \t]?){10}\d{4}/);
+  if (mk) chave = mk[0].replace(/\D/g, '');
+  // total da nota
+  let totalNota = NaN;
+  const mt = t.match(/Valor\s+(?:total|a pagar)[^\d\n]*\n?[^\d\n]*([\d.]+,\d{2})/i) || t.match(/Valor Total da Nota Fiscal\s*\n?\s*([\d.]+,\d{2})/i);
+  if (mt) totalNota = _num(mt[1]);
+  return { itens, mercado, cnpj, data, chave, totalNota };
+}
+function _ovNota(html) {
+  let ov = document.getElementById('nota-ov'); if (ov) ov.remove();
+  ov = document.createElement('div'); ov.id = 'nota-ov';
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.72);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px';
+  ov.innerHTML = '<div style="background:var(--s1);border:1px solid var(--bd2);border-radius:12px;padding:20px;width:100%;max-width:640px;max-height:92vh;overflow:auto">' + html + '</div>';
+  ov.addEventListener('mousedown', e => { if (e.target === ov) ov.remove(); });
+  document.body.appendChild(ov); return ov;
+}
+function abreNota() {
+  const ov = _ovNota(`
+    <div style="font-family:'Syne',sans-serif;font-size:17px;font-weight:700;color:var(--teal);margin-bottom:8px">🧾 Importar nota fiscal</div>
+    <div style="font-size:12px;color:var(--t1);line-height:1.6;margin-bottom:10px">No Nota Paraná, abra a nota (tela com a lista de itens), selecione tudo (Ctrl+A), copie (Ctrl+C) e cole aqui (Ctrl+V). Pode colar várias notas, uma de cada vez.</div>
+    <textarea id="nota-txt" placeholder="Cole aqui o texto da nota..." style="width:100%;height:170px;background:var(--s2);border:1px solid var(--bd2);border-radius:8px;color:var(--txt);padding:10px;font-size:12px;font-family:'DM Mono',monospace;margin-bottom:12px"></textarea>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn-ghost" onclick="document.getElementById('nota-ov').remove()">Cancelar</button>
+      <button class="btn-primary" onclick="leNota()">Ler nota</button>
+    </div>`);
+  setTimeout(() => { const t = document.getElementById('nota-txt'); if (t) t.focus(); }, 50);
+}
+function leNota() {
+  const txt = document.getElementById('nota-txt').value;
+  const r = parseNota(txt);
+  if (!r.itens.length) { showToast('⚠ Não encontrei produtos neste texto. Use a tela com a lista de itens (Qtde, UN, Vl. Unit.).', 6000); return; }
+  const cm = _cnpjMap();
+  const mercado = titleMercado((r.cnpj && cm[r.cnpj]) || r.mercado);
+  const hoje = new Date();
+  const dt = r.data || { d: hoje.getDate(), m: hoje.getMonth() + 1, a: hoje.getFullYear() };
+  NOTA = Object.assign(r, { mercadoEdit: mercado, semData: !r.data, dt });
+  mostraPreviaNota();
+}
+function _notasJa() {
+  const set = new Set();
+  Object.keys(DB).forEach(k => (DB[k].notas || []).forEach(c => set.add(c)));
+  return set;
+}
+function mostraPreviaNota() {
+  const r = NOTA, brl = v => 'R$ ' + v.toFixed(2).replace('.', ',');
+  const soma = Math.round(r.itens.reduce((s, i) => s + i.valor, 0) * 100) / 100;
+  const dup = r.chave && _notasJa().has(r.chave);
+  const confere = isNaN(r.totalNota) ? '' : (Math.abs(r.totalNota - soma) < 0.05
+    ? `<span style="color:var(--grn)">✔ confere com o total da nota (${brl(r.totalNota)})</span>`
+    : `<span style="color:var(--gold)">⚠ total da nota ${brl(r.totalNota)} difere da soma dos itens (pode ter desconto)</span>`);
+  const mercs = [...new Set(Object.values(DB).flatMap(d => d.items.map(i => i.mercado)).filter(Boolean))];
+  const mesOpts = _MES_NOME.map((n, i) => `<option value="${i}" ${i + 1 === r.dt.m ? 'selected' : ''}>${_MES_ABR[i]}</option>`).join('');
+  const linhas = r.itens.map(i => `<tr><td style="padding:4px 6px;border-top:1px solid var(--bd)">${esc(i.produto)}</td><td style="padding:4px 6px;border-top:1px solid var(--bd);text-align:right;font-family:'DM Mono',monospace;white-space:nowrap">${i.qtd % 1 ? i.qtd.toFixed(3) : i.qtd} ${esc(i.un)}</td><td style="padding:4px 6px;border-top:1px solid var(--bd);text-align:right;font-family:'DM Mono',monospace;white-space:nowrap">${brl(i.valor)}</td></tr>`).join('');
+  _ovNota(`
+    <div style="font-family:'Syne',sans-serif;font-size:17px;font-weight:700;color:var(--teal);margin-bottom:10px">Conferir nota</div>
+    ${dup ? '<div style="background:rgba(240,84,106,.12);border:1px solid rgba(240,84,106,.4);color:var(--red);border-radius:8px;padding:8px 10px;font-size:12px;margin-bottom:10px">⚠ Esta nota já foi importada antes. Importar de novo vai duplicar os itens.</div>' : ''}
+    ${r.semData ? '<div style="font-size:12px;color:var(--gold);margin-bottom:8px">Não achei a data na nota. Confira o mês abaixo.</div>' : ''}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+      <label style="font-size:11px;color:var(--t2)">Mercado<input id="nota-merc" list="nota-mercs" value="${esc(r.mercadoEdit)}" style="width:100%;margin-top:3px;background:var(--s2);border:1px solid var(--bd2);border-radius:6px;color:var(--txt);padding:8px;font-size:13px"><datalist id="nota-mercs">${mercs.map(m => `<option value="${esc(m)}">`).join('')}</datalist></label>
+      <div style="display:flex;gap:8px">
+        <label style="font-size:11px;color:var(--t2);flex:1">Mês<select id="nota-mes" style="width:100%;margin-top:3px;background:var(--s2);border:1px solid var(--bd2);border-radius:6px;color:var(--txt);padding:8px;font-size:13px">${mesOpts}</select></label>
+        <label style="font-size:11px;color:var(--t2);width:80px">Ano<input id="nota-ano" type="number" value="${r.dt.a}" style="width:100%;margin-top:3px;background:var(--s2);border:1px solid var(--bd2);border-radius:6px;color:var(--txt);padding:8px;font-size:13px"></label>
+      </div>
+    </div>
+    <div style="font-size:12px;color:var(--t1);margin-bottom:6px">${r.itens.length} itens · <strong>${brl(soma)}</strong> ${confere ? '· ' + confere : ''}</div>
+    <div style="max-height:260px;overflow:auto;border:1px solid var(--bd);border-radius:8px;margin-bottom:12px"><table style="width:100%;border-collapse:collapse;font-size:12px">${linhas}</table></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end;flex-wrap:wrap">
+      <button class="btn-ghost" onclick="abreNota()">‹ Voltar</button>
+      <button class="btn-primary" onclick="gravaNota()">Adicionar ao mês</button>
+    </div>`);
+}
+function gravaNota() {
+  const r = NOTA; if (!r) return;
+  const merc = titleMercado(document.getElementById('nota-merc').value);
+  const mes = parseInt(document.getElementById('nota-mes').value, 10);
+  const ano = parseInt(document.getElementById('nota-ano').value, 10);
+  if (!(ano >= 2000 && ano <= 2100)) { showToast('⚠ Ano inválido'); return; }
+  const { key, label } = mesChaveDe(ano, mes);
+  if (!DB[key]) DB[key] = { label, total: 0, count: 0, items: [] };
+  const d = DB[key];
+  r.itens.forEach(i => { const it = { produto: i.produto, qtd: i.qtd, un: i.un, valor: i.valor }; if (merc) it.mercado = merc; d.items.push(it); });
+  if (r.chave) { d.notas = d.notas || []; if (!d.notas.includes(r.chave)) d.notas.push(r.chave); }
+  d.count = d.items.length;
+  d.total = Math.round(d.items.reduce((s, i) => s + i.valor, 0) * 100) / 100;
+  if (!MONTHS_ORDER.includes(key)) MONTHS_ORDER.push(key);
+  MONTHS_ORDER.sort((a, b) => _ordMes(a) - _ordMes(b));
+  if (r.cnpj && merc) _salvaCnpj(r.cnpj, merc);
+  saveToStorage(); remapTudo();
+  const ov = document.getElementById('nota-ov'); if (ov) ov.remove();
+  buildSidebar(); selectMonth(key);
+  showToast('✔ Nota adicionada em ' + label + ' (' + r.itens.length + ' itens)');
+  NOTA = null;
+}
+
+// ── LANÇAMENTO MANUAL (compra sem nota: só o total) ───────────────
+function abreManual(mes, ano) {
+  const h = new Date();
+  if (mes === undefined) { mes = h.getMonth(); ano = h.getFullYear(); }
+  const brl = v => 'R$ ' + v.toFixed(2).replace('.', ',');
+  const { key } = mesChaveDe(ano, mes);
+  const exist = DB[key] ? DB[key].items.map((it, i) => ({ it, i })).filter(x => x.it.produto === MANUAL_NOME) : [];
+  const mercs = [...new Set(Object.values(DB).flatMap(d => d.items.map(i => i.mercado)).filter(Boolean))];
+  const mesOpts = _MES_NOME.map((n, i) => `<option value="${i}" ${i === mes ? 'selected' : ''}>${_MES_ABR[i]}</option>`).join('');
+  const inp = 'width:100%;margin-top:3px;background:var(--s2);border:1px solid var(--bd2);border-radius:6px;color:var(--txt);padding:8px;font-size:14px';
+  const lista = exist.length ? `<div style="font-size:11px;color:var(--t2);margin:12px 0 4px">Já lançados neste mês</div>` + exist.map(x => `<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 8px;border:1px solid var(--bd);border-radius:6px;margin-bottom:4px;font-size:12px"><span>${esc(x.it.mercado || 'Sem mercado informado')}</span><span style="font-family:'DM Mono',monospace">${brl(x.it.valor)} <button class="cat-edit" onclick="removeManual('${key.replace(/'/g, "\\'")}',${x.i},${mes},${ano})" title="Remover">✕</button></span></div>`).join('') : '';
+  _ovNota(`
+    <div style="font-family:'Syne',sans-serif;font-size:17px;font-weight:700;color:var(--gold);margin-bottom:8px">✎ Total de compra sem nota</div>
+    <div style="font-size:12px;color:var(--t1);line-height:1.6;margin-bottom:12px">Use quando não tiver a nota. O valor entra no total do mês e na média, mas sem o detalhe dos produtos.</div>
+    <div style="display:flex;gap:8px;margin-bottom:10px">
+      <label style="font-size:11px;color:var(--t2);flex:1">Mês<select id="man-mes" onchange="abreManual(+this.value, +document.getElementById('man-ano').value)" style="${inp}">${mesOpts}</select></label>
+      <label style="font-size:11px;color:var(--t2);width:90px">Ano<input id="man-ano" type="number" value="${ano}" onchange="abreManual(+document.getElementById('man-mes').value, +this.value)" style="${inp}"></label>
+    </div>
+    <label style="font-size:11px;color:var(--t2);display:block;margin-bottom:10px">Mercado (opcional)<input id="man-merc" list="man-mercs" style="${inp}"><datalist id="man-mercs">${mercs.map(m => `<option value="${esc(m)}">`).join('')}</datalist></label>
+    <label style="font-size:11px;color:var(--t2);display:block;margin-bottom:12px">Valor total (R$)<input id="man-val" inputmode="decimal" placeholder="ex.: 868,28" style="${inp}"></label>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button class="btn-ghost" onclick="document.getElementById('nota-ov').remove()">Fechar</button><button class="btn-primary" onclick="gravaManual()">Lançar</button></div>
+    ${lista}`);
+  setTimeout(() => { const t = document.getElementById('man-val'); if (t) t.focus(); }, 50);
+}
+function gravaManual() {
+  const mes = parseInt(document.getElementById('man-mes').value, 10), ano = parseInt(document.getElementById('man-ano').value, 10);
+  const v = _num(document.getElementById('man-val').value);
+  const merc = titleMercado(document.getElementById('man-merc').value);
+  if (!(v > 0)) { showToast('⚠ Digite o valor total'); return; }
+  if (!(ano >= 2000 && ano <= 2100)) { showToast('⚠ Ano inválido'); return; }
+  const { key, label } = mesChaveDe(ano, mes);
+  if (!DB[key]) DB[key] = { label, total: 0, count: 0, items: [] };
+  const it = { produto: MANUAL_NOME, qtd: 1, un: 'UN', valor: Math.round(v * 100) / 100, manual: true }; if (merc) it.mercado = merc;
+  DB[key].items.push(it);
+  _recalcMes(key);
+  saveToStorage(); buildSidebar(); showOverview();
+  showToast('✔ ' + label + ': lançado R$ ' + it.valor.toFixed(2).replace('.', ','));
+  abreManual(mes, ano);
+}
+function removeManual(key, idx, mes, ano) {
+  const d = DB[key]; if (!d || !d.items[idx] || d.items[idx].produto !== MANUAL_NOME) return;
+  d.items.splice(idx, 1);
+  if (!d.items.length) { delete DB[key]; const i = MONTHS_ORDER.indexOf(key); if (i >= 0) MONTHS_ORDER.splice(i, 1); } else _recalcMes(key);
+  saveToStorage(); buildSidebar(); showOverview(); abreManual(mes, ano);
+}
+function _recalcMes(key) {
+  const d = DB[key];
+  d.count = d.items.length;
+  d.total = Math.round(d.items.reduce((s, i) => s + i.valor, 0) * 100) / 100;
+  if (!MONTHS_ORDER.includes(key)) MONTHS_ORDER.push(key);
+  MONTHS_ORDER.sort((a, b) => _ordMes(a) - _ordMes(b));
+}
+function _ordMes(k) {
+  const lb = (DB[k] && DB[k].label) || '';
+  const m = lb.match(/^(\w{3})\/(\d\d)$/); if (!m) return 1e9;
+  return (2000 + +m[2]) * 12 + _MES_ABR.indexOf(m[1]);
 }
 
 // ── LIMPAR DADOS ──────────────────────────────────────────────────
