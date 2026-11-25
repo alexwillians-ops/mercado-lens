@@ -11,13 +11,16 @@ jobs:
     steps:
       - name: Ping Supabase REST API
         run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+          STATUS=$(curl -s -o response.txt -w "%{http_code}" \
             "${{ secrets.SUPABASE_URL }}/rest/v1/" \
-            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}")
+            -H "apikey: ${{ secrets.SUPABASE_ANON_KEY }}" \
+            -H "Authorization: Bearer ${{ secrets.SUPABASE_ANON_KEY }}")
           
           echo "HTTP Status: $STATUS"
           
           if [ "$STATUS" -ne 200 ]; then
-            echo "Falha ao contatar o Supabase. Status retornado: $STATUS"
+            echo "Resposta do servidor:"
+            cat response.txt
+            echo ""
             exit 1
           fi
