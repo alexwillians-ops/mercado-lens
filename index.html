@@ -3523,7 +3523,7 @@ async function sbEnvia() {
     sbStatus(SB_FILA.size ? 'salvando' : 'ok');
     if (SB_FILA.size) { clearTimeout(SB_TIMER); SB_TIMER = setTimeout(sbEnvia, 300); }
   } catch (e) {
-    SB_ERRO = String((e && (e.message || e.code)) || e).slice(0, 140); console.warn('Sync falhou:', e);
+    SB_ERRO = String((e && (e.message || e.code)) || e).slice(0, 140) + (e && e.status ? ' [HTTP ' + e.status + ']' : ''); console.warn('Sync falhou:', e);
     SB_TENT++; sbStatus('erro'); clearTimeout(SB_TIMER); SB_TIMER = setTimeout(sbEnvia, Math.min(4000 * SB_TENT, 20000));
   }
 }
@@ -3570,7 +3570,7 @@ async function sbSincroniza() {
     if (sbAplica(data || [])) sbRecarrega();
     SB_ERRO = ''; sbStatus(SB_FILA.size ? 'salvando' : 'ok');
   } catch (e) {
-    SB_ERRO = String((e && (e.message || e.code)) || e).slice(0, 140); console.warn('Sync falhou:', e);
+    SB_ERRO = String((e && (e.message || e.code)) || e).slice(0, 140) + (e && e.status ? ' [HTTP ' + e.status + ']' : ''); console.warn('Sync falhou:', e);
     sbStatus('erro'); clearTimeout(SB_RETRY); SB_RETRY = setTimeout(sbSincroniza, 8000);
   }
 }
@@ -3593,7 +3593,8 @@ async function sbIniciaSessao(user) {
     const r = await SB.from('dados').select('chave,valor').eq('user_id', user.id);
     if (r.error) throw r.error; data = r.data || [];
   } catch (e) {
-    sbStatus('erro'); sbFechaLogin(); showToast('⚠ Sem conexão com a nuvem. Usando os dados deste aparelho.', 5000);
+    SB_ERRO = String((e && (e.message || e.code)) || e).slice(0, 140) + (e && e.status ? ' [HTTP ' + e.status + ']' : ''); console.warn('Sync inicial falhou:', e);
+    sbStatus('erro'); sbFechaLogin(); showToast('⚠ Não consegui falar com a nuvem (' + SB_ERRO + '). Usando os dados deste aparelho e tentando de novo.', 9000);
     clearTimeout(SB_RETRY); SB_RETRY = setTimeout(() => sbIniciaSessao(user), 20000); return;
   }
   const nuvem = data.filter(r => r.valor !== '');
@@ -3624,7 +3625,7 @@ async function sbIniciaSessao(user) {
     sbRecarrega();
     if (SB_FILA.size) sbEnvia();
   }
-  sbFechaLogin(); sbStatus(SB_FILA.size ? 'salvando' : 'ok');
+  SB_ERRO = ''; sbFechaLogin(); sbStatus(SB_FILA.size ? 'salvando' : 'ok');
   if (SB_CANAL) { try { SB.removeChannel(SB_CANAL); } catch (e) {} }
   SB_CANAL = SB.channel('dados-' + user.id).on('postgres_changes', { event: '*', schema: 'public', table: 'dados', filter: 'user_id=eq.' + user.id }, p => {
     const r = p.new; if (!r || !r.chave || r.cliente === SB_CLIENTE) return;
