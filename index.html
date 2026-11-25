@@ -3567,7 +3567,8 @@ async function sbSincroniza() {
   try {
     const { data, error } = await SB.from('dados').select('chave,valor').eq('user_id', SB_USER.id);
     if (error) throw error;
-    if (sbAplica(data || [])) sbRecarrega();
+    if (!(data || []).some(x => x.chave === 'mercadolens_db' && x.valor !== '') && _lsGet('mercadolens_db')) { SB_CHAVES.forEach(k => { if (_lsGet(k) !== null) SB_FILA.add(k); }); sbEnvia(); }
+    else if (sbAplica(data || [])) sbRecarrega();
     SB_ERRO = ''; sbStatus(SB_FILA.size ? 'salvando' : 'ok');
   } catch (e) {
     SB_ERRO = String((e && (e.message || e.code)) || e).slice(0, 140) + (e && e.status ? ' [HTTP ' + e.status + ']' : ''); console.warn('Sync falhou:', e);
@@ -3613,6 +3614,7 @@ async function sbIniciaSessao(user) {
       }
     }
   }
+  if (!temNuvem && dbLocal && !primeira) enviarLocal = true; // nuvem vazia: nada a perder, envia o que há neste aparelho
   _lsSet.call(localStorage, 'mercadolens_uid', user.id);
   if (enviarLocal) {
     SB_CHAVES.forEach(k => { if (_lsGet(k) !== null) SB_FILA.add(k); });
@@ -3625,6 +3627,7 @@ async function sbIniciaSessao(user) {
     sbRecarrega();
     if (SB_FILA.size) sbEnvia();
   }
+  if (!temNuvem && _lsGet('mercadolens_db')) { SB_CHAVES.forEach(k => { if (_lsGet(k) !== null) SB_FILA.add(k); }); sbEnvia(); }
   SB_ERRO = ''; sbFechaLogin(); sbStatus(SB_FILA.size ? 'salvando' : 'ok');
   if (SB_CANAL) { try { SB.removeChannel(SB_CANAL); } catch (e) {} }
   SB_CANAL = SB.channel('dados-' + user.id).on('postgres_changes', { event: '*', schema: 'public', table: 'dados', filter: 'user_id=eq.' + user.id }, p => {
