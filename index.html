@@ -3481,6 +3481,7 @@ const SB_KEY = 'sb_publishable_LbTACt0MQ2zadIJdMpoRlw_Yy8w0cqL';         // ex.:
 const SB_ATIVO = /^https:\/\//.test(SB_URL) && SB_KEY.length > 20 && typeof supabase !== 'undefined';
 const SB_CHAVES = ['mercadolens_db', 'mercadolens_order', 'mercadolens_meta', 'mercadolens_listas', 'mercadolens_cat_ovr', 'mercadolens_alias', 'mercadolens_alias_ign', 'mercadolens_metas_cat', 'mercadolens_cnpj'];
 const SB_CLIENTE = Math.random().toString(36).slice(2, 10);
+let SB_ERRO = '', SB_TENT = 0;
 let SB = null, SB_USER = null, SB_FILA = new Set(), SB_TIMER = null, SB_CANAL = null, SB_RECARGA = null, SB_RETRY = null;
 const _lsSet = Storage.prototype.setItem, _lsRem = Storage.prototype.removeItem;
 Storage.prototype.setItem = function (k, v) { _lsSet.call(this, k, v); if (this === localStorage && SB_USER && SB_CHAVES.includes(k)) sbAgenda(k); };
@@ -3496,9 +3497,10 @@ function sbStatus(st) {
     const b = document.createElement('button'); b.className = 'btn-ghost'; b.id = 'sb-sair'; b.textContent = 'Sair'; b.onclick = sbSair;
     host.appendChild(b);
   }
-  const mapa = { ok: ['☁ sincronizado', '#3dd68c'], salvando: ['☁ salvando…', '#f5c842'], erro: ['⚠ sem conexão', '#f0546a'] };
-  const [t, c] = mapa[st] || mapa.ok; el.textContent = t; el.style.color = c;
-  el.title = SB_USER && SB_USER.email ? 'Conta: ' + SB_USER.email : '';
+  const mapa = { ok: ['☁ sincronizado', '#3dd68c'], salvando: ['☁ salvando…', '#f5c842'], erro: ['⚠ reenviando…', '#f0546a'] };
+  const [t, c] = mapa[st] || mapa.ok; el.textContent = t; el.style.color = c; el.style.cursor = 'pointer';
+  el.onclick = () => showToast(st === 'erro' ? 'Não conseguiu falar com a nuvem agora (' + (SB_ERRO || 'sem detalhe') + '). Seus dados estão salvos neste aparelho e o app tenta de novo sozinho.' : 'Tudo salvo na nuvem' + (SB_USER && SB_USER.email ? ' · conta ' + SB_USER.email : ''), 7000);
+  el.title = (SB_USER && SB_USER.email ? 'Conta: ' + SB_USER.email : '') + (st === 'erro' && SB_ERRO ? ' · ' + SB_ERRO : '');
   const sair = document.getElementById('sb-sair'); if (sair) sair.title = el.title;
 }
 function sbAgenda(k) {
@@ -3517,10 +3519,12 @@ async function sbEnvia() {
     if (error) throw error;
     Object.keys(snap).forEach(k => { if (_lsGet(k) === snap[k]) SB_FILA.delete(k); });
     try { if (SB_FILA.size) _lsSet.call(localStorage, 'mercadolens_pend', JSON.stringify([...SB_FILA])); else _lsRem.call(localStorage, 'mercadolens_pend'); } catch (e) {}
+    SB_TENT = 0; SB_ERRO = '';
     sbStatus(SB_FILA.size ? 'salvando' : 'ok');
     if (SB_FILA.size) { clearTimeout(SB_TIMER); SB_TIMER = setTimeout(sbEnvia, 300); }
   } catch (e) {
-    sbStatus('erro'); clearTimeout(SB_TIMER); SB_TIMER = setTimeout(sbEnvia, 15000);
+    SB_ERRO = String((e && (e.message || e.code)) || e).slice(0, 140); console.warn('Sync falhou:', e);
+    SB_TENT++; sbStatus('erro'); clearTimeout(SB_TIMER); SB_TIMER = setTimeout(sbEnvia, Math.min(4000 * SB_TENT, 20000));
   }
 }
 function sbAplica(linhas) {
@@ -3564,8 +3568,11 @@ async function sbSincroniza() {
     const { data, error } = await SB.from('dados').select('chave,valor').eq('user_id', SB_USER.id);
     if (error) throw error;
     if (sbAplica(data || [])) sbRecarrega();
-    sbStatus(SB_FILA.size ? 'salvando' : 'ok');
-  } catch (e) { sbStatus('erro'); }
+    SB_ERRO = ''; sbStatus(SB_FILA.size ? 'salvando' : 'ok');
+  } catch (e) {
+    SB_ERRO = String((e && (e.message || e.code)) || e).slice(0, 140); console.warn('Sync falhou:', e);
+    sbStatus('erro'); clearTimeout(SB_RETRY); SB_RETRY = setTimeout(sbSincroniza, 8000);
+  }
 }
 function sbDialogo(html) {
   return new Promise(res => {
